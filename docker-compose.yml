@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: finai-postgres
+    environment:
+      POSTGRES_USER: finai
+      POSTGRES_PASSWORD: finai
+      POSTGRES_DB: finai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finai"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: finai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU 사용 시 deploy.resources.reservations.devices 추가
+
+volumes:
+  postgres_data:
+  ollama_data:

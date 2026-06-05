@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Data / models (do not commit binaries)
+data/chroma/
+data/raw/
+data/processed/
+*.db
+*.sqlite
+*.sqlite3
+ollama_models/
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+coverage.xml
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Alembic working files
+*.bak
