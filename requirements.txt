@@ -27,3 +27,4 @@ pydantic-settings>=2.5.0
 
 # Data ingest
 requests>=2.32.0
+datasets>=4.0.0

@@ -38,6 +38,7 @@ desktop.ini
 data/chroma/
 data/raw/
 data/processed/
+data/*.json
 *.db
 *.sqlite
 *.sqlite3
