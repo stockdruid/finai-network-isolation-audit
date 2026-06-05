@@ -24,39 +24,53 @@
 
 ## 셋업
 
+### Python (Python 3.12 권장)
+
 ```bash
-# 1. Python 가상환경
-python -m venv .venv
-.venv\Scripts\activate    # Windows
-# source .venv/bin/activate  # macOS/Linux
-
-# 2. 의존성
+py -3.12 -m venv .venv
+.venv\Scripts\activate           # Windows
+# source .venv/bin/activate      # macOS/Linux
 pip install -r requirements-dev.txt
+```
 
-# 3. 환경 변수
-copy .env.example .env    # Windows
-# cp .env.example .env       # macOS/Linux
-# .env 편집 (DB·Ollama·API 키)
+### 환경 변수
 
-# 4. Postgres + Ollama 컨테이너 기동
+```bash
+copy .env.example .env           # Windows
+# cp .env.example .env           # macOS/Linux
+# .env 편집 (DB / Ollama / API 키)
+```
+
+### PostgreSQL + Ollama (둘 중 하나 선택)
+
+**A. Docker compose (팀 표준)**
+
+```bash
 docker compose up -d
+docker exec finai-ollama ollama pull qwen2.5:7b
+```
 
-# 5. Ollama 모델 pull (최초 1회)
-docker exec finai-ollama ollama pull EEVE-Korean-10.8B-v1.0
+**B. 네이티브 설치**
 
-# 6. DB 마이그레이션
+```bash
+# Windows
+winget install PostgreSQL.PostgreSQL.15
+winget install Ollama.Ollama
+ollama pull qwen2.5:7b
+# Postgres 기본 계정/DB 생성 후 .env DATABASE_URL 갱신
+```
+
+### DB 마이그레이션 + 초기 적재 + 실행
+
+```bash
 alembic upgrade head
 
-# 7. 초기 데이터 적재
 python scripts/fetch_finlife.py
 python scripts/fetch_ecos.py
 python scripts/seed_chroma.py
 
-# 8. FastAPI
-uvicorn main:app --reload --port 8000
-
-# 9. Streamlit (다른 터미널)
-streamlit run ui.py
+uvicorn main:app --reload --port 8000     # FastAPI
+streamlit run ui.py                       # Streamlit (다른 터미널)
 ```
 
 ## 디렉토리 구조
