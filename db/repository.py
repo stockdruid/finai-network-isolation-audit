@@ -161,3 +161,42 @@ async def stats_timeline(session: AsyncSession, *, days: int = 30) -> list[dict]
     )
     result = await session.execute(stmt, {"days": days})
     return [{"date": str(r[0]), "count": r[1]} for r in result.all()]
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+
+async def generate_report(session: AsyncSession, scan_id: str) -> ComplianceScore:
+    overview = await stats_overview(session)
+    total = overview["total_diagnoses"]
+    correct = overview["correct_detections"]
+    violations = overview["violations_detected"]
+    accuracy = overview["accuracy"]
+
+    by_severity = await stats_by_severity(session)
+    by_violation = await stats_by_violation_type(session)
+
+    passed = correct
+    failed = violations
+    warns = max(total - passed - failed, 0)
+    score = round(passed / total * 100, 2) if total else 0.0
+
+    return await insert_score(
+        session,
+        scan_id=scan_id,
+        total_score=score,
+        passed=passed,
+        failed=failed,
+        warnings=warns,
+        details={
+            "accuracy": accuracy,
+            "total_logs": overview["total_logs"],
+            "by_severity": by_severity,
+            "by_violation_type": by_violation,
+        },
+    )
+
+
+async def get_report(session: AsyncSession, report_id: int) -> ComplianceScore | None:
+    return await session.get(ComplianceScore, report_id)
