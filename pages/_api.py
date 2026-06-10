@@ -15,24 +15,112 @@ API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 DEFAULT_TIMEOUT = 5.0
 
 
+def _get(path: str, params: dict | None = None) -> Any:
+    try:
+        r = httpx.get(f"{API_BASE_URL}{path}", params=params, timeout=DEFAULT_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
+
+
+def _post(path: str, json: dict | None = None) -> Any:
+    try:
+        r = httpx.post(f"{API_BASE_URL}{path}", json=json or {}, timeout=DEFAULT_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+
 @st.cache_data(ttl=30)
 def fetch_logs(
     mode: str | None = None,
     since: int = 0,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """GET /logs 폴링. 30초 캐시."""
     params: dict[str, Any] = {"since": since, "limit": limit}
     if mode:
         params["mode"] = mode
-    try:
-        r = httpx.get(f"{API_BASE_URL}/logs", params=params, timeout=DEFAULT_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
-    except httpx.HTTPError as exc:
-        st.error(f"FastAPI 호출 실패: {exc}")
-        return []
+    return _get("/logs", params) or []
 
+
+def fetch_log_detail(log_id: int) -> dict | None:
+    return _get(f"/logs/{log_id}")
+
+
+# ---------------------------------------------------------------------------
+# Diagnosis
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def fetch_diagnoses(
+    severity: str | None = None,
+    source_log_id: int | None = None,
+    since: int = 0,
+    limit: int = 100,
+) -> list[dict]:
+    params: dict[str, Any] = {"since": since, "limit": limit}
+    if severity:
+        params["severity"] = severity
+    if source_log_id is not None:
+        params["source_log_id"] = source_log_id
+    return _get("/diagnosis", params) or []
+
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_policies(category: str | None = None) -> list[dict]:
+    params = {}
+    if category:
+        params["category"] = category
+    return _get("/policies", params) or []
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def fetch_stats_overview() -> dict:
+    return _get("/stats/overview") or {}
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_violations() -> list[dict]:
+    return _get("/stats/violations") or []
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_severity() -> list[dict]:
+    return _get("/stats/severity") or []
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_timeline(days: int = 30) -> list[dict]:
+    return _get("/stats/timeline", {"days": days}) or []
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+
+def generate_report(scan_id: str | None = None) -> dict | None:
+    return _post("/reports/generate", {"scan_id": scan_id} if scan_id else {})
+
+
+# ---------------------------------------------------------------------------
+# Health / sidebar
+# ---------------------------------------------------------------------------
 
 def health_ok() -> bool:
     try:
@@ -43,7 +131,6 @@ def health_ok() -> bool:
 
 
 def sidebar_status() -> None:
-    """모든 페이지 사이드바 하단에 API 상태 표시."""
     with st.sidebar:
         st.divider()
         if health_ok():

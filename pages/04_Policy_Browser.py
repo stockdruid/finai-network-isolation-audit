@@ -1,63 +1,70 @@
-"""정책 매핑 브라우저 — 법령/인증 트리 (와이어프레임, 정책팀 YAML 대기)."""
+"""정책 매핑 브라우저 — GET /policies 실 데이터."""
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 
-from pages._api import sidebar_status
+from pages._api import fetch_policies, sidebar_status
 
 st.set_page_config(page_title="정책 브라우저", page_icon="📜", layout="wide")
 st.title("📜 정책 매핑 브라우저")
 sidebar_status()
 
-st.info(
-    "정책팀 YAML 수령 후 활성화. 현재는 와이어프레임 — `GET /policies` 응답 모킹."
-)
+# ---------------------------------------------------------------------------
+# 데이터 로드
+# ---------------------------------------------------------------------------
 
-# === Mock 카테고리 트리 ===
-mock_tree: dict[str, list[dict]] = {
-    "법령": [
-        {
-            "code": "eFin-Reg-15",
-            "title": "전자금융감독규정 제15조 (망분리)",
-            "description": "금융회사는 내부 통신망과 외부 통신망을 분리하여 운영하여야 한다.",
-            "severity_weight": 5,
-            "related_rules": ["external_egress"],
-        },
-        {
-            "code": "PIPA-23",
-            "title": "개인정보보호법 제23조 (민감정보 처리 제한)",
-            "description": "주민등록번호 등 민감정보는 별도 동의 없이 처리할 수 없다.",
-            "severity_weight": 4,
-            "related_rules": ["pii_ssn", "pii_card"],
-        },
-    ],
-    "인증": [
-        {
-            "code": "PCI-DSS-3.4",
-            "title": "PCI DSS v4 — Requirement 3.4 (PAN 보호)",
-            "description": "1차 계좌번호(PAN)는 저장 시 강력한 암호화 적용.",
-            "severity_weight": 4,
-            "related_rules": ["pii_card"],
-        },
-        {
-            "code": "ISMS-P-A.10.1",
-            "title": "ISMS-P A.10.1 (네트워크 보안)",
-            "description": "내부망과 외부망 간 트래픽 통제 및 로깅.",
-            "severity_weight": 5,
-            "related_rules": ["external_egress"],
-        },
-    ],
-}
+policies = fetch_policies()
+if not policies:
+    st.warning("정책 데이터가 없습니다. `scripts/load_policies.py` 실행 후 새로고침하세요.")
+    st.stop()
 
-category = st.radio("카테고리", options=list(mock_tree.keys()), horizontal=True)
-items = mock_tree[category]
+df = pd.DataFrame(policies)
+categories = sorted(df["category"].unique().tolist())
 
-for item in items:
-    with st.expander(f"**{item['code']}** — {item['title']}"):
-        st.write(item["description"])
-        st.caption(f"심각도 가중치: {item['severity_weight']}")
-        st.write("연계 룰:")
-        st.code(", ".join(item["related_rules"]))
+# ---------------------------------------------------------------------------
+# 카테고리 필터
+# ---------------------------------------------------------------------------
 
-# TODO: 정책팀 YAML → DB 적재 후 GET /policies 연동
-# TODO: 진단 결과의 regulation_reference 클릭 시 이 페이지로 라우팅
+selected_cat = st.radio("카테고리", options=["전체"] + categories, horizontal=True)
+
+if selected_cat != "전체":
+    filtered = df[df["category"] == selected_cat]
+else:
+    filtered = df
+
+# ---------------------------------------------------------------------------
+# 통계 카드
+# ---------------------------------------------------------------------------
+
+c1, c2, c3 = st.columns(3)
+c1.metric("정책 수", len(filtered))
+c2.metric("카테고리", filtered["category"].nunique())
+c3.metric("평균 심각도 가중치", f"{filtered['severity_weight'].mean():.1f}")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 정책 목록
+# ---------------------------------------------------------------------------
+
+for _, row in filtered.iterrows():
+    severity_bar = "🔴" if row["severity_weight"] >= 8.0 else "🟠" if row["severity_weight"] >= 6.0 else "🟢"
+    with st.expander(f"{severity_bar} **{row['code']}** — {row['title']}  `{row['category']}`"):
+        if row.get("description"):
+            st.write(row["description"])
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.caption(f"심각도 가중치: **{row['severity_weight']}**")
+        with col2:
+            st.caption(f"카테고리: **{row['category']}**")
+
+        rules = row.get("related_rules", [])
+        if rules:
+            st.markdown("**관련 법령/규정:**")
+            for rule in rules:
+                if isinstance(rule, dict):
+                    st.markdown(f"- {rule.get('law', '')} {rule.get('section', '')}")
+                else:
+                    st.markdown(f"- {rule}")
