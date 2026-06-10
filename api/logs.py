@@ -7,11 +7,10 @@
 
 응답: chatbot_logs row 배열 (id ASC).
 """
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import ChatbotLog
+from db import repository as repo
 from db.session import get_session
 
 router = APIRouter()
@@ -24,11 +23,16 @@ async def list_logs(
     limit: int = Query(default=100, ge=1, le=1000),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict]:
-    stmt = select(ChatbotLog).where(ChatbotLog.id > since)
-    if mode is not None:
-        stmt = stmt.where(ChatbotLog.mode == mode)
-    stmt = stmt.order_by(ChatbotLog.id.asc()).limit(limit)
-
-    result = await session.execute(stmt)
-    rows = result.scalars().all()
+    rows = await repo.list_logs(session, mode=mode, since=since, limit=limit)
     return [row.to_dict() for row in rows]
+
+
+@router.get("/logs/{log_id}")
+async def get_log(
+    log_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    log = await repo.get_log_by_id(session, log_id)
+    if log is None:
+        raise HTTPException(status_code=404, detail="Log not found")
+    return log.to_dict()
