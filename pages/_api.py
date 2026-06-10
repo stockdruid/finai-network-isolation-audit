@@ -137,3 +137,50 @@ def sidebar_status() -> None:
             st.success(f"API: {API_BASE_URL}")
         else:
             st.error(f"API 연결 실패: {API_BASE_URL}")
+
+
+def sidebar_filters(
+    *,
+    show_mode: bool = False,
+    show_severity: bool = False,
+    show_period: bool = False,
+    show_limit: bool = False,
+) -> dict[str, Any]:
+    """공용 사이드바 필터. 필요한 필터만 켜서 사용."""
+    filters: dict[str, Any] = {}
+    with st.sidebar:
+        st.subheader("🔎 필터")
+
+        if show_mode:
+            mode = st.selectbox(
+                "호출 모드",
+                options=["전체", "internal", "external"],
+                index=0,
+                key="filter_mode",
+            )
+            filters["mode"] = None if mode == "전체" else mode
+
+        if show_severity:
+            severity = st.selectbox(
+                "심각도",
+                options=["전체", "critical", "high", "medium", "low", "info"],
+                index=0,
+                key="filter_severity",
+            )
+            filters["severity"] = None if severity == "전체" else severity
+
+        if show_period:
+            period = st.slider(
+                "기간 (일)", min_value=7, max_value=90, value=30, step=7,
+                key="filter_period",
+            )
+            filters["period"] = period
+
+        if show_limit:
+            limit = st.slider(
+                "표시 수", min_value=10, max_value=1000, value=100, step=10,
+                key="filter_limit",
+            )
+            filters["limit"] = limit
+
+    return filters

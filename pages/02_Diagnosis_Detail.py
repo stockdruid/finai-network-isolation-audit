@@ -4,27 +4,21 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from pages._api import fetch_diagnoses, fetch_log_detail, sidebar_status
+from pages._api import fetch_diagnoses, fetch_log_detail, sidebar_filters, sidebar_status
 
 st.set_page_config(page_title="진단 상세", page_icon="🔍", layout="wide")
 st.title("🔍 진단 결과 상세")
 sidebar_status()
+f = sidebar_filters(show_severity=True, show_limit=True)
 
 # ---------------------------------------------------------------------------
-# 필터
+# 데이터 로드
 # ---------------------------------------------------------------------------
 
-fc1, fc2, fc3 = st.columns([1, 1, 1])
-severity = fc1.selectbox(
-    "심각도", options=["(all)", "critical", "high", "medium", "low", "info"], index=0,
+diagnoses = fetch_diagnoses(
+    severity=f.get("severity"),
+    limit=f.get("limit", 100),
 )
-limit = fc2.slider("표시 수", min_value=10, max_value=500, value=100, step=10)
-source_filter = fc3.number_input("source_log_id (선택)", min_value=0, value=0, step=1)
-
-severity_param = None if severity == "(all)" else severity
-source_param = int(source_filter) if source_filter > 0 else None
-
-diagnoses = fetch_diagnoses(severity=severity_param, source_log_id=source_param, limit=limit)
 
 if not diagnoses:
     st.warning("조건에 맞는 진단 결과가 없습니다.")
@@ -71,7 +65,6 @@ with right:
     if selected and selected.selection.rows:
         row = df.iloc[selected.selection.rows[0]]
         row_dict = row.to_dict()
-        # 불필요한 display 컬럼 제거
         row_dict.pop("badge", None)
         row_dict.pop("correct_display", None)
 

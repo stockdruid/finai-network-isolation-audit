@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 from pages._api import (
@@ -13,12 +12,14 @@ from pages._api import (
     fetch_stats_timeline,
     fetch_stats_violations,
     generate_report,
+    sidebar_filters,
     sidebar_status,
 )
 
 st.set_page_config(page_title="진단 대시보드", page_icon="📊", layout="wide")
 st.title("📊 진단 대시보드")
 sidebar_status()
+f = sidebar_filters(show_period=True, show_mode=True)
 
 # ---------------------------------------------------------------------------
 # KPI 카드
@@ -92,8 +93,7 @@ with right:
 # ---------------------------------------------------------------------------
 
 st.subheader("시간대별 진단 추이")
-days = st.slider("기간 (일)", min_value=7, max_value=90, value=30, step=7)
-timeline_data = fetch_stats_timeline(days=days)
+timeline_data = fetch_stats_timeline(days=f.get("period", 30))
 if timeline_data:
     df_tl = pd.DataFrame(timeline_data)
     df_tl["date"] = pd.to_datetime(df_tl["date"])
@@ -111,9 +111,10 @@ st.divider()
 
 left2, right2 = st.columns(2)
 
+logs = fetch_logs(mode=f.get("mode"), limit=1000)
+
 with left2:
     st.subheader("호출 모드 분포")
-    logs = fetch_logs(limit=1000)
     if logs:
         df_logs = pd.DataFrame(logs)
         mode_counts = df_logs["mode"].value_counts().reset_index()
