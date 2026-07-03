@@ -11,7 +11,15 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import ChatbotLog, ComplianceScore, DiagnosisResult, PolicyMapping
+from db.models import (
+    ChatbotLog,
+    CommonControl,
+    ComplianceScore,
+    Detector,
+    DiagnosisResult,
+    PolicyMapping,
+    Requirement,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -200,3 +208,98 @@ async def generate_report(session: AsyncSession, scan_id: str) -> ComplianceScor
 
 async def get_report(session: AsyncSession, report_id: int) -> ComplianceScore | None:
     return await session.get(ComplianceScore, report_id)
+
+
+# ---------------------------------------------------------------------------
+# CommonControl
+# ---------------------------------------------------------------------------
+
+async def list_controls(
+    session: AsyncSession,
+    *,
+    domain: str | None = None,
+    severity: str | None = None,
+) -> list[CommonControl]:
+    stmt = select(CommonControl).order_by(CommonControl.control_id)
+    if domain is not None:
+        stmt = stmt.where(CommonControl.domain == domain)
+    if severity is not None:
+        stmt = stmt.where(CommonControl.severity == severity)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_control(session: AsyncSession, control_id: str) -> CommonControl | None:
+    stmt = select(CommonControl).where(CommonControl.control_id == control_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# Detector
+# ---------------------------------------------------------------------------
+
+async def list_detectors(
+    session: AsyncSession,
+    *,
+    area: str | None = None,
+    priority: str | None = None,
+    automation: str | None = None,
+) -> list[Detector]:
+    stmt = select(Detector).order_by(Detector.priority, Detector.detector_id)
+    if area is not None:
+        stmt = stmt.where(Detector.area == area)
+    if priority is not None:
+        stmt = stmt.where(Detector.priority == priority)
+    if automation is not None:
+        stmt = stmt.where(Detector.automation == automation)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_detector(session: AsyncSession, detector_id: str) -> Detector | None:
+    stmt = select(Detector).where(Detector.detector_id == detector_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# Requirement
+# ---------------------------------------------------------------------------
+
+async def list_requirements(
+    session: AsyncSession,
+    *,
+    source_standard: str | None = None,
+    control_id: str | None = None,
+    priority: str | None = None,
+    limit: int = 500,
+) -> list[Requirement]:
+    stmt = select(Requirement).order_by(Requirement.source_standard, Requirement.requirement_id)
+    if source_standard is not None:
+        stmt = stmt.where(Requirement.source_standard == source_standard)
+    if control_id is not None:
+        stmt = stmt.where(Requirement.control_id == control_id)
+    if priority is not None:
+        stmt = stmt.where(Requirement.priority == priority)
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def compliance_matrix(session: AsyncSession) -> list[dict]:
+    """공통통제 × 원천기준 크로스탭 — 매핑 매트릭스."""
+    stmt = (
+        select(
+            Requirement.source_standard,
+            Requirement.control_id,
+            func.count(Requirement.id).label("count"),
+        )
+        .group_by(Requirement.source_standard, Requirement.control_id)
+        .order_by(Requirement.source_standard, Requirement.control_id)
+    )
+    result = await session.execute(stmt)
+    return [
+        {"source_standard": r[0], "control_id": r[1], "count": r[2]}
+        for r in result.all()
+    ]
