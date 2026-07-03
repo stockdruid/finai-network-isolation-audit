@@ -119,6 +119,58 @@ def generate_report(scan_id: str | None = None) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Compliance mapping (v3)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_controls(domain: str | None = None, severity: str | None = None) -> list[dict]:
+    params: dict[str, Any] = {}
+    if domain:
+        params["domain"] = domain
+    if severity:
+        params["severity"] = severity
+    return _get("/controls", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_detectors(
+    area: str | None = None,
+    priority: str | None = None,
+    automation: str | None = None,
+) -> list[dict]:
+    params: dict[str, Any] = {}
+    if area:
+        params["area"] = area
+    if priority:
+        params["priority"] = priority
+    if automation:
+        params["automation"] = automation
+    return _get("/detectors", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_requirements(
+    source_standard: str | None = None,
+    control_id: str | None = None,
+    priority: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    params: dict[str, Any] = {"limit": limit}
+    if source_standard:
+        params["source_standard"] = source_standard
+    if control_id:
+        params["control_id"] = control_id
+    if priority:
+        params["priority"] = priority
+    return _get("/requirements", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_matrix() -> list[dict]:
+    return _get("/requirements/matrix") or []
+
+
+# ---------------------------------------------------------------------------
 # Health / sidebar
 # ---------------------------------------------------------------------------
 
