@@ -21,6 +21,9 @@ plotly>=5.24.0
 # Logging
 structlog>=24.0.0
 
+# Config / serialization
+pyyaml>=6.0
+
 # Validation / settings
 pydantic>=2.9.0
 pydantic-settings>=2.5.0
@@ -28,3 +31,7 @@ pydantic-settings>=2.5.0
 # Data ingest
 requests>=2.32.0
 datasets>=4.0.0
+
+# 컴플라이언스 매핑 XLSX / 데이터프레임
+openpyxl>=3.1.0
+pandas>=2.2.0

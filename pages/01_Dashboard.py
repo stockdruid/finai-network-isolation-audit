@@ -1,70 +1,265 @@
-"""메인 대시보드 — 컴플라이언스 점수, 정확도, 위반 분포."""
+"""메인 대시보드 — 컴플라이언스 점수, 진단 정확도, 위반 분포, 타임라인."""
 from __future__ import annotations
+
+from collections import Counter
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-from pages._api import fetch_logs, sidebar_status
+from pages._api import (
+    fetch_isms_p_verdict_summary,
+    fetch_logs,
+    fetch_pii_aggregate,
+    fetch_stats_overview,
+    fetch_stats_severity,
+    fetch_stats_timeline,
+    fetch_stats_violations,
+    generate_report,
+    sidebar_filters,
+    sidebar_status,
+)
 
 st.set_page_config(page_title="진단 대시보드", page_icon="📊", layout="wide")
 st.title("📊 진단 대시보드")
 sidebar_status()
+f = sidebar_filters(show_period=True, show_mode=True)
 
-logs = fetch_logs(limit=1000)
-if not logs:
-    st.warning("아직 로그가 없습니다. `POST /chat` 호출 후 새로고침하세요.")
+# ---------------------------------------------------------------------------
+# KPI 카드
+# ---------------------------------------------------------------------------
+
+overview = fetch_stats_overview()
+if not overview:
+    st.warning("API 연결을 확인하세요.")
     st.stop()
 
-df = pd.DataFrame(logs)
-external_df = df[df["mode"] == "external"]
-
-# === KPI 카드 ===
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("총 호출", len(df))
-c2.metric("외부 호출 (위반 후보)", len(external_df))
+c1.metric("총 로그", overview.get("total_logs", 0))
+c2.metric("총 진단", overview.get("total_diagnoses", 0))
 c3.metric(
-    "가드레일 트리거",
-    int(df["guardrail_triggered"].apply(lambda x: len(x) > 0).sum()),
+    "진단 정확도",
+    f"{overview.get('accuracy', 0)}%",
+    help="intentional_vuln_tag 대비 진단 엔진 correct 비율",
 )
-intentional = external_df["intentional_vuln_tag"].notna().sum()
 c4.metric(
-    "intentional_vuln_tag 적중률",
-    f"{intentional}/{len(external_df)}" if len(external_df) else "0/0",
-    help="진단 엔진이 매칭한 의도적 취약점 수 (개발자 B insert 후 정확도 컬럼 활용)",
+    "위반 탐지",
+    overview.get("violations_detected", 0),
+    delta=f"정확 {overview.get('correct_detections', 0)}건",
+    delta_color="normal",
 )
 
 st.divider()
 
-# === 모드별 분포 ===
+# ---------------------------------------------------------------------------
+# v4 HERO — PII 위험도 등급 + ISMS-P 진행률 (발표 임팩트 라인)
+# ---------------------------------------------------------------------------
+
+st.subheader("🎯 컴플라이언스 현황 — v4 (개인정보 위험도 + ISMS-P)")
+
+agg = fetch_pii_aggregate()
+isms_verdicts = fetch_isms_p_verdict_summary()
+
+hero_left, hero_right = st.columns(2)
+
+# PII 위험도 카드 — /pii-risk/aggregate (서버측 정규화)
+with hero_left:
+    st.markdown("**🛡️ 개인정보 유출 위험도 (실시간)**")
+
+    total_score = float(agg.get("total_score", 0.0)) if agg else 0.0
+    picked = agg.get("level") if agg else None
+    pii_log_count = int(agg.get("pii_log_count", 0)) if agg else 0
+    by_type = agg.get("by_type", []) if agg else []
+    unmatched = agg.get("unmatched", []) if agg else []
+
+    color_by_level = {
+        "Critical": "#dc2626",
+        "High": "#ea580c",
+        "Medium": "#ca8a04",
+        "Low": "#16a34a",
+    }
+    picked_color = color_by_level.get(picked["level_en"] if picked else "", "#6b7280")
+    picked_label = (
+        f"{picked['level_en']} ({picked['level_ko']})" if picked else "데이터 없음"
+    )
+    picked_action = picked["action_level"] if picked else "-"
+
+    st.markdown(
+        f"""
+        <div style="background: linear-gradient(135deg, {picked_color}22, {picked_color}55);
+                    border-left: 8px solid {picked_color}; padding: 20px; border-radius: 8px;">
+          <div style="font-size: 14px; color: #6b7280;">현재 위험 등급</div>
+          <div style="font-size: 36px; font-weight: 700; color: {picked_color}; margin: 4px 0;">
+            {picked_label}
+          </div>
+          <div style="font-size: 15px; color: #374151;">
+            합산 점수 <b>{total_score:.1f}점</b> · 조치 수준: <b>{picked_action}</b>
+          </div>
+          <div style="font-size: 13px; color: #6b7280; margin-top: 6px;">
+            PII 탐지 로그 {pii_log_count}건 · 유출 유형 {len(by_type)}종
+            {f' · 미분류 라벨 {len(unmatched)}건' if unmatched else ''}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if unmatched:
+        with st.expander(f"⚠️ 정규화 실패 라벨 {len(unmatched)}건", expanded=False):
+            for u in unmatched[:10]:
+                st.caption(f"- `{u['raw']}` ({u['count']}회)")
+            st.caption("→ `core/pii_resolver.py`의 ALIASES 사전에 추가 필요.")
+
+# ISMS-P 진행률 게이지
+with hero_right:
+    st.markdown("**📋 금융권 ISMS-P 진단 진행률**")
+
+    verdict_counts = {v["verdict"]: v["count"] for v in isms_verdicts}
+    total_items = sum(verdict_counts.values()) or 1
+    unassessed = verdict_counts.get("미평가", 0)
+    assessed = total_items - unassessed
+    progress = assessed / total_items * 100
+
+    passed = verdict_counts.get("적합", 0)
+    partial = verdict_counts.get("부분적합", 0)
+    failed = verdict_counts.get("부적합", 0)
+    evidence_missing = verdict_counts.get("증적부족", 0)
+
+    gauge_color = "#dc2626" if progress < 30 else "#eab308" if progress < 70 else "#16a34a"
+
+    fig_gauge = go.Figure(
+        go.Indicator(
+            mode="gauge+number+delta",
+            value=progress,
+            number={"suffix": "%", "font": {"size": 40}},
+            delta={"reference": 0, "position": "top"},
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1},
+                "bar": {"color": gauge_color},
+                "steps": [
+                    {"range": [0, 30], "color": "#fee2e2"},
+                    {"range": [30, 70], "color": "#fef3c7"},
+                    {"range": [70, 100], "color": "#dcfce7"},
+                ],
+                "threshold": {
+                    "line": {"color": "#111827", "width": 3},
+                    "thickness": 0.75,
+                    "value": 100,
+                },
+            },
+            title={"text": f"평가 완료: {assessed} / {total_items}", "font": {"size": 14}},
+        )
+    )
+    fig_gauge.update_layout(height=220, margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig_gauge, use_container_width=True)
+
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("적합", passed)
+    b2.metric("부분적합", partial)
+    b3.metric("부적합", failed, delta_color="inverse")
+    b4.metric("증적부족", evidence_missing, delta_color="inverse")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 차트 — 심각도 분포 + 위반 유형
+# ---------------------------------------------------------------------------
+
 left, right = st.columns(2)
+
 with left:
-    st.subheader("호출 모드 분포")
-    mode_counts = df["mode"].value_counts().reset_index()
-    mode_counts.columns = ["mode", "count"]
-    fig = px.pie(mode_counts, names="mode", values="count", hole=0.4)
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("심각도별 분포")
+    severity_data = fetch_stats_severity()
+    if severity_data:
+        df_sev = pd.DataFrame(severity_data)
+        color_map = {
+            "critical": "#dc3545",
+            "high": "#fd7e14",
+            "medium": "#ffc107",
+            "low": "#20c997",
+            "info": "#6c757d",
+        }
+        fig = px.pie(
+            df_sev, names="severity", values="count", hole=0.45,
+            color="severity", color_discrete_map=color_map,
+        )
+        fig.update_traces(textinfo="label+value")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("진단 데이터 없음")
 
 with right:
-    st.subheader("시간대별 호출 추이")
-    df["created_at"] = pd.to_datetime(df["created_at"])
-    timeline = (
-        df.set_index("created_at")
-        .resample("1min")
-        .size()
-        .reset_index(name="count")
-    )
-    fig = px.line(timeline, x="created_at", y="count", markers=True)
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("위반 유형별 통계")
+    violation_data = fetch_stats_violations()
+    if violation_data:
+        df_viol = pd.DataFrame(violation_data)
+        fig = px.bar(
+            df_viol, x="count", y="violation_type", orientation="h",
+            color="count", color_continuous_scale="Reds",
+        )
+        fig.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("진단 데이터 없음")
 
-# === 외부 호출 대상 도메인 ===
-st.subheader("외부 호출 대상 도메인 (망분리 위반 후보)")
-if external_df.empty:
-    st.info("외부 호출 기록 없음.")
+# ---------------------------------------------------------------------------
+# 차트 — 시간대별 추이
+# ---------------------------------------------------------------------------
+
+st.subheader("시간대별 진단 추이")
+timeline_data = fetch_stats_timeline(days=f.get("period", 30))
+if timeline_data:
+    df_tl = pd.DataFrame(timeline_data)
+    df_tl["date"] = pd.to_datetime(df_tl["date"])
+    fig = px.area(df_tl, x="date", y="count", markers=True)
+    fig.update_layout(xaxis_title="날짜", yaxis_title="진단 수")
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    domain_counts = external_df["target_url"].value_counts().reset_index()
-    domain_counts.columns = ["target_url", "count"]
-    fig = px.bar(domain_counts, x="target_url", y="count")
-    st.plotly_chart(fig, use_container_width=True)
+    st.info("해당 기간 진단 데이터 없음")
 
-# TODO: GET /diagnosis 연동 → 심각도 분포, 진단 엔진 정확도 카드, 규제 매핑 차트
+# ---------------------------------------------------------------------------
+# 호출 모드 분포 (로그 기반)
+# ---------------------------------------------------------------------------
+
+st.divider()
+
+left2, right2 = st.columns(2)
+
+logs = fetch_logs(mode=f.get("mode"), limit=1000)
+
+with left2:
+    st.subheader("호출 모드 분포")
+    if logs:
+        df_logs = pd.DataFrame(logs)
+        mode_counts = df_logs["mode"].value_counts().reset_index()
+        mode_counts.columns = ["mode", "count"]
+        fig = px.pie(mode_counts, names="mode", values="count", hole=0.4)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("로그 없음")
+
+with right2:
+    st.subheader("외부 호출 대상 도메인")
+    if logs:
+        ext_df = df_logs[df_logs["mode"] == "external"]
+        if not ext_df.empty:
+            domain_counts = ext_df["target_url"].value_counts().reset_index()
+            domain_counts.columns = ["target_url", "count"]
+            fig = px.bar(domain_counts, x="target_url", y="count")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("외부 호출 없음")
+
+# ---------------------------------------------------------------------------
+# 리포트 생성
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.subheader("📄 컴플라이언스 리포트 생성")
+if st.button("현재 데이터 기준 리포트 생성"):
+    with st.spinner("리포트 생성 중..."):
+        report = generate_report()
+    if report:
+        st.success(f"리포트 생성 완료 (ID: {report['id']}, Score: {report['total_score']})")
+        st.json(report)

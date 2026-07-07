@@ -41,36 +41,48 @@ copy .env.example .env           # Windows
 # .env 편집 (DB / Ollama / API 키)
 ```
 
-### PostgreSQL + Ollama (둘 중 하나 선택)
+### 실행 — 두 가지 방법
 
-**A. Docker compose (팀 표준)**
+**A. Docker compose 통합 실행 (팀 표준, 발표/AWS 이전 권장)**
+
+한 번에 `postgres + migrate + api + ui` 부팅. migrate가 alembic upgrade 후 api/ui가 순차 기동.
 
 ```bash
-docker compose up -d
+docker compose up --build -d
+# → api:8000, ui:8501, postgres:5432
+
+# 컴플라이언스 자료 적재 (컨테이너 내부에서)
+docker compose exec api python scripts/import_compliance_mappings.py
+docker compose exec api python scripts/import_pii_risk.py
+docker compose exec api python scripts/import_isms_p.py
+docker compose exec api python scripts/import_chatbot_logs.py --reset
+
+# LLM 필요 시 (선택 프로필)
+docker compose --profile llm up -d ollama
 docker exec finai-ollama ollama pull qwen2.5:7b
 ```
 
-**B. 네이티브 설치**
+**B. 네이티브 실행 (로컬 개발)**
 
 ```bash
-# Windows
-winget install PostgreSQL.PostgreSQL.15
-winget install Ollama.Ollama
-ollama pull qwen2.5:7b
-# Postgres 기본 계정/DB 생성 후 .env DATABASE_URL 갱신
+# DB만 도커, 앱은 호스트에서 hot reload
+docker compose up -d postgres
+
+alembic upgrade head
+python scripts/import_compliance_mappings.py
+python scripts/import_pii_risk.py
+python scripts/import_isms_p.py
+
+uvicorn main:app --reload --port 8000     # 터미널 1
+streamlit run ui.py                       # 터미널 2
 ```
 
-### DB 마이그레이션 + 초기 적재 + 실행
+### 헬스체크
 
-```bash
-alembic upgrade head
-
-python scripts/fetch_finlife.py
-python scripts/fetch_ecos.py
-python scripts/seed_chroma.py
-
-uvicorn main:app --reload --port 8000     # FastAPI
-streamlit run ui.py                       # Streamlit (다른 터미널)
+```
+http://localhost:8000/health   → {"status":"ok"}
+http://localhost:8000/docs     → Swagger UI
+http://localhost:8501/         → Streamlit 대시보드
 ```
 
 ## 디렉토리 구조

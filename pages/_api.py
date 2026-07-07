@@ -15,24 +15,271 @@ API_BASE_URL = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
 DEFAULT_TIMEOUT = 5.0
 
 
+def _get(path: str, params: dict | None = None) -> Any:
+    try:
+        r = httpx.get(f"{API_BASE_URL}{path}", params=params, timeout=DEFAULT_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
+
+
+def _post(path: str, json: dict | None = None) -> Any:
+    try:
+        r = httpx.post(f"{API_BASE_URL}{path}", json=json or {}, timeout=DEFAULT_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+
 @st.cache_data(ttl=30)
 def fetch_logs(
     mode: str | None = None,
     since: int = 0,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """GET /logs 폴링. 30초 캐시."""
     params: dict[str, Any] = {"since": since, "limit": limit}
     if mode:
         params["mode"] = mode
+    return _get("/logs", params) or []
+
+
+def fetch_log_detail(log_id: int) -> dict | None:
+    return _get(f"/logs/{log_id}")
+
+
+# ---------------------------------------------------------------------------
+# Diagnosis
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def fetch_diagnoses(
+    severity: str | None = None,
+    source_log_id: int | None = None,
+    since: int = 0,
+    limit: int = 100,
+) -> list[dict]:
+    params: dict[str, Any] = {"since": since, "limit": limit}
+    if severity:
+        params["severity"] = severity
+    if source_log_id is not None:
+        params["source_log_id"] = source_log_id
+    return _get("/diagnosis", params) or []
+
+
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_policies(category: str | None = None) -> list[dict]:
+    params = {}
+    if category:
+        params["category"] = category
+    return _get("/policies", params) or []
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=30)
+def fetch_stats_overview() -> dict:
+    return _get("/stats/overview") or {}
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_violations() -> list[dict]:
+    return _get("/stats/violations") or []
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_severity() -> list[dict]:
+    return _get("/stats/severity") or []
+
+
+@st.cache_data(ttl=30)
+def fetch_stats_timeline(days: int = 30) -> list[dict]:
+    return _get("/stats/timeline", {"days": days}) or []
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+
+def generate_report(scan_id: str | None = None) -> dict | None:
+    return _post("/reports/generate", {"scan_id": scan_id} if scan_id else {})
+
+
+# ---------------------------------------------------------------------------
+# Compliance mapping (v3)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_controls(domain: str | None = None, severity: str | None = None) -> list[dict]:
+    params: dict[str, Any] = {}
+    if domain:
+        params["domain"] = domain
+    if severity:
+        params["severity"] = severity
+    return _get("/controls", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_detectors(
+    area: str | None = None,
+    priority: str | None = None,
+    automation: str | None = None,
+) -> list[dict]:
+    params: dict[str, Any] = {}
+    if area:
+        params["area"] = area
+    if priority:
+        params["priority"] = priority
+    if automation:
+        params["automation"] = automation
+    return _get("/detectors", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_requirements(
+    source_standard: str | None = None,
+    control_id: str | None = None,
+    priority: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    params: dict[str, Any] = {"limit": limit}
+    if source_standard:
+        params["source_standard"] = source_standard
+    if control_id:
+        params["control_id"] = control_id
+    if priority:
+        params["priority"] = priority
+    return _get("/requirements", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_matrix() -> list[dict]:
+    return _get("/requirements/matrix") or []
+
+
+# ---------------------------------------------------------------------------
+# v4 — PII 위험도
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_pii_types(min_score: float | None = None) -> list[dict]:
+    params: dict[str, Any] = {}
+    if min_score is not None:
+        params["min_score"] = min_score
+    return _get("/pii-risk/types", params) or []
+
+
+@st.cache_data(ttl=300)
+def fetch_pii_risk_levels() -> list[dict]:
+    return _get("/pii-risk/levels") or []
+
+
+@st.cache_data(ttl=30)
+def fetch_pii_aggregate(limit: int = 1000) -> dict:
+    return _get("/pii-risk/aggregate", {"limit": limit}) or {}
+
+
+def score_pii_fields(fields: list[str]) -> dict | None:
+    return _post("/pii-risk/score", {"fields": fields})
+
+
+# ---------------------------------------------------------------------------
+# v4 — ISMS-P
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_criteria(
+    major_category: str | None = None,
+    section_id: str | None = None,
+) -> list[dict]:
+    params: dict[str, Any] = {}
+    if major_category:
+        params["major_category"] = major_category
+    if section_id:
+        params["section_id"] = section_id
+    return _get("/isms-p/criteria", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_checklist(
+    criterion_id: str | None = None,
+    verdict: str | None = None,
+    dev_tech_category: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    params: dict[str, Any] = {"limit": limit}
+    if criterion_id:
+        params["criterion_id"] = criterion_id
+    if verdict:
+        params["verdict"] = verdict
+    if dev_tech_category:
+        params["dev_tech_category"] = dev_tech_category
+    return _get("/isms-p/checklist", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_verdict_summary() -> list[dict]:
+    return _get("/isms-p/summary/verdict") or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_category_summary() -> list[dict]:
+    return _get("/isms-p/summary/category") or []
+
+
+def _patch(path: str, json: dict) -> Any:
     try:
-        r = httpx.get(f"{API_BASE_URL}/logs", params=params, timeout=DEFAULT_TIMEOUT)
+        r = httpx.patch(f"{API_BASE_URL}{path}", json=json, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError as exc:
-        st.error(f"FastAPI 호출 실패: {exc}")
-        return []
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
 
+
+def update_isms_p_verdict(
+    item_id: int,
+    *,
+    verdict: str | None = None,
+    evidence_location: str | None = None,
+    responsible: str | None = None,
+    remediation_due: str | None = None,
+    review_memo: str | None = None,
+) -> dict | None:
+    payload = {
+        k: v
+        for k, v in {
+            "verdict": verdict,
+            "evidence_location": evidence_location,
+            "responsible": responsible,
+            "remediation_due": remediation_due,
+            "review_memo": review_memo,
+        }.items()
+        if v is not None
+    }
+    return _patch(f"/isms-p/checklist/{item_id}", payload)
+
+
+def bulk_update_isms_p_verdict(updates: list[dict]) -> dict | None:
+    return _post("/isms-p/checklist/bulk-verdict", {"updates": updates})
+
+
+# ---------------------------------------------------------------------------
+# Health / sidebar
+# ---------------------------------------------------------------------------
 
 def health_ok() -> bool:
     try:
@@ -43,10 +290,56 @@ def health_ok() -> bool:
 
 
 def sidebar_status() -> None:
-    """모든 페이지 사이드바 하단에 API 상태 표시."""
     with st.sidebar:
         st.divider()
         if health_ok():
             st.success(f"API: {API_BASE_URL}")
         else:
             st.error(f"API 연결 실패: {API_BASE_URL}")
+
+
+def sidebar_filters(
+    *,
+    show_mode: bool = False,
+    show_severity: bool = False,
+    show_period: bool = False,
+    show_limit: bool = False,
+) -> dict[str, Any]:
+    """공용 사이드바 필터. 필요한 필터만 켜서 사용."""
+    filters: dict[str, Any] = {}
+    with st.sidebar:
+        st.subheader("🔎 필터")
+
+        if show_mode:
+            mode = st.selectbox(
+                "호출 모드",
+                options=["전체", "internal", "external"],
+                index=0,
+                key="filter_mode",
+            )
+            filters["mode"] = None if mode == "전체" else mode
+
+        if show_severity:
+            severity = st.selectbox(
+                "심각도",
+                options=["전체", "critical", "high", "medium", "low", "info"],
+                index=0,
+                key="filter_severity",
+            )
+            filters["severity"] = None if severity == "전체" else severity
+
+        if show_period:
+            period = st.slider(
+                "기간 (일)", min_value=7, max_value=90, value=30, step=7,
+                key="filter_period",
+            )
+            filters["period"] = period
+
+        if show_limit:
+            limit = st.slider(
+                "표시 수", min_value=10, max_value=1000, value=100, step=10,
+                key="filter_limit",
+            )
+            filters["limit"] = limit
+
+    return filters

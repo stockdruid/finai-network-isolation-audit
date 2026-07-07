@@ -2,7 +2,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api import chat, health, logs
+from api import (
+    chat,
+    controls,
+    detectors,
+    diagnosis,
+    health,
+    isms_p,
+    logs,
+    pii_risk,
+    policies,
+    reports,
+    requirements,
+    stats,
+)
 from middlewares.logging import setup_structlog
 from middlewares.request_id import RequestIdMiddleware
 from middlewares.timing import TimingMiddleware
@@ -27,3 +40,12 @@ app.add_middleware(TimingMiddleware)
 app.include_router(health.router, tags=["health"])
 app.include_router(chat.router, tags=["chat"])
 app.include_router(logs.router, tags=["logs"])
+app.include_router(diagnosis.router, tags=["diagnosis"])
+app.include_router(policies.router, tags=["policies"])
+app.include_router(controls.router, tags=["controls"])
+app.include_router(detectors.router, tags=["detectors"])
+app.include_router(requirements.router, tags=["requirements"])
+app.include_router(pii_risk.router, tags=["pii-risk"])
+app.include_router(isms_p.router, tags=["isms-p"])
+app.include_router(stats.router, tags=["stats"])
+app.include_router(reports.router, tags=["reports"])
