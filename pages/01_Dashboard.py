@@ -11,8 +11,7 @@ import streamlit as st
 from pages._api import (
     fetch_isms_p_verdict_summary,
     fetch_logs,
-    fetch_pii_risk_levels,
-    fetch_pii_types,
+    fetch_pii_aggregate,
     fetch_stats_overview,
     fetch_stats_severity,
     fetch_stats_timeline,
@@ -59,33 +58,20 @@ st.divider()
 
 st.subheader("🎯 컴플라이언스 현황 — v4 (개인정보 위험도 + ISMS-P)")
 
-pii_types = fetch_pii_types()
-pii_levels = fetch_pii_risk_levels()
+agg = fetch_pii_aggregate()
 isms_verdicts = fetch_isms_p_verdict_summary()
 
 hero_left, hero_right = st.columns(2)
 
-# PII 위험도 카드 (챗봇 로그 pii_fields 기반 합산 점수 → 등급)
+# PII 위험도 카드 — /pii-risk/aggregate (서버측 정규화)
 with hero_left:
     st.markdown("**🛡️ 개인정보 유출 위험도 (실시간)**")
 
-    all_logs = fetch_logs(limit=1000)
-    pii_logs = [lg for lg in all_logs if lg.get("pii_detected") and lg.get("pii_fields")]
-    detected_fields: list[str] = []
-    for lg in pii_logs:
-        fields = lg.get("pii_fields") or []
-        if isinstance(fields, list):
-            detected_fields.extend([str(f) for f in fields])
-
-    counts = Counter(detected_fields)
-    type_score = {r["name"]: float(r["risk_score"]) for r in pii_types}
-    total_score = sum(type_score.get(f, 0.0) * n for f, n in counts.items())
-
-    picked = None
-    for lv in sorted(pii_levels, key=lambda x: -float(x["min_score"])):
-        if total_score >= float(lv["min_score"]):
-            picked = lv
-            break
+    total_score = float(agg.get("total_score", 0.0)) if agg else 0.0
+    picked = agg.get("level") if agg else None
+    pii_log_count = int(agg.get("pii_log_count", 0)) if agg else 0
+    by_type = agg.get("by_type", []) if agg else []
+    unmatched = agg.get("unmatched", []) if agg else []
 
     color_by_level = {
         "Critical": "#dc2626",
@@ -94,7 +80,9 @@ with hero_left:
         "Low": "#16a34a",
     }
     picked_color = color_by_level.get(picked["level_en"] if picked else "", "#6b7280")
-    picked_label = f"{picked['level_en']} ({picked['level_ko']})" if picked else "데이터 없음"
+    picked_label = (
+        f"{picked['level_en']} ({picked['level_ko']})" if picked else "데이터 없음"
+    )
     picked_action = picked["action_level"] if picked else "-"
 
     st.markdown(
@@ -109,12 +97,19 @@ with hero_left:
             합산 점수 <b>{total_score:.1f}점</b> · 조치 수준: <b>{picked_action}</b>
           </div>
           <div style="font-size: 13px; color: #6b7280; margin-top: 6px;">
-            PII 탐지 로그 {len(pii_logs)}건 · 유출 유형 {len(counts)}종
+            PII 탐지 로그 {pii_log_count}건 · 유출 유형 {len(by_type)}종
+            {f' · 미분류 라벨 {len(unmatched)}건' if unmatched else ''}
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    if unmatched:
+        with st.expander(f"⚠️ 정규화 실패 라벨 {len(unmatched)}건", expanded=False):
+            for u in unmatched[:10]:
+                st.caption(f"- `{u['raw']}` ({u['count']}회)")
+            st.caption("→ `core/pii_resolver.py`의 ALIASES 사전에 추가 필요.")
 
 # ISMS-P 진행률 게이지
 with hero_right:

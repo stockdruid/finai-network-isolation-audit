@@ -9,14 +9,12 @@
 """
 from __future__ import annotations
 
-from collections import Counter
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from pages._api import (
-    fetch_logs,
+    fetch_pii_aggregate,
     fetch_pii_risk_levels,
     fetch_pii_types,
     score_pii_fields,
@@ -40,34 +38,20 @@ df_types = pd.DataFrame(pii_types)
 df_levels = pd.DataFrame(levels)
 
 # ---------------------------------------------------------------------------
-# KPI — 챗봇 로그 위험도
+# KPI — 챗봇 로그 위험도 (서버측 정규화)
 # ---------------------------------------------------------------------------
 st.subheader("📊 챗봇 로그 기반 PII 위험도 (실시간)")
 
-logs = fetch_logs(limit=500)
-pii_logs = [lg for lg in logs if lg.get("pii_detected") and lg.get("pii_fields")]
-detected_fields: list[str] = []
-for lg in pii_logs:
-    fields = lg.get("pii_fields") or []
-    if isinstance(fields, list):
-        detected_fields.extend([str(f) for f in fields])
-
-field_counts = Counter(detected_fields)
-type_score_map = {r["name"]: float(r["risk_score"]) for r in pii_types}
-total_score = sum(
-    type_score_map.get(f, 0.0) * cnt for f, cnt in field_counts.items()
-)
-
-# 등급 판정
-picked = None
-for lv in sorted(levels, key=lambda x: -float(x["min_score"])):
-    if total_score >= float(lv["min_score"]):
-        picked = lv
-        break
+agg = fetch_pii_aggregate()
+total_score = float(agg.get("total_score", 0.0))
+picked = agg.get("level")
+pii_log_count = int(agg.get("pii_log_count", 0))
+by_type = agg.get("by_type", [])
+unmatched = agg.get("unmatched", [])
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("PII 탐지 로그", f"{len(pii_logs)}건")
-k2.metric("유출 유형 수", f"{len(field_counts)}종")
+k1.metric("PII 탐지 로그", f"{pii_log_count}건")
+k2.metric("유출 유형 수", f"{len(by_type)}종")
 k3.metric("합산 위험 점수", f"{total_score:.1f}점")
 k4.metric(
     "현재 등급",
@@ -80,6 +64,30 @@ if picked:
         f"{color_map.get(picked['level_en'], '⚪')} **{picked['level_en']} — "
         f"{picked['action_level']}** · {picked['description']}"
     )
+
+if by_type:
+    with st.expander("🔎 정규화 매칭 상세 (원본 라벨 → 정본 명칭 × 등장 횟수)", expanded=False):
+        st.dataframe(
+            pd.DataFrame(by_type)[["name", "count", "risk_score", "contribution"]].rename(
+                columns={
+                    "name": "정본 유형",
+                    "count": "등장",
+                    "risk_score": "단위 점수",
+                    "contribution": "기여 점수",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+if unmatched:
+    with st.expander(f"⚠️ 정규화 실패 라벨 {len(unmatched)}건 (스코어 미반영)", expanded=False):
+        st.dataframe(
+            pd.DataFrame(unmatched).rename(columns={"raw": "원본 라벨", "count": "등장"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption("→ `core/pii_resolver.py`의 ALIASES/KEYWORD_MATCHERS 사전에 추가 필요.")
 
 st.divider()
 

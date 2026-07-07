@@ -28,6 +28,18 @@ async def list_risk_levels(
     return [r.to_dict() for r in rows]
 
 
+@router.get("/aggregate")
+async def aggregate_from_logs(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """챗봇 로그 전체 → 정규화 → 합산 위험도 + 등급 판정.
+
+    챗봇 로그의 원본 pii_fields 라벨(영문 snake_case 등)을 정본 명칭으로 정규화 후 스코어링.
+    """
+    return await repo.aggregate_pii_risk_from_logs(session, limit=limit)
+
+
 class ScoreRequest(BaseModel):
     fields: list[str]
 

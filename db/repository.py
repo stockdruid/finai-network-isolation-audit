@@ -331,31 +331,145 @@ async def list_pii_risk_levels(session: AsyncSession) -> list[PiiRiskLevel]:
     return list(result.scalars().all())
 
 
+async def aggregate_pii_risk_from_logs(
+    session: AsyncSession, *, limit: int = 1000
+) -> dict:
+    """챗봇 로그 전체를 훑어 pii_fields 합산 → 위험도 판정.
+
+    대시보드 hero 밴드 및 발표 실시간 KPI 소스.
+    - `pii_detected=True` 로그만 대상
+    - `pii_fields` 원본 라벨을 `core.pii_resolver`로 정규화
+    - 정본별 등장 횟수 × risk_score 합산
+    """
+    from core.pii_resolver import resolve
+
+    stmt = (
+        select(ChatbotLog)
+        .where(ChatbotLog.pii_detected.is_(True))
+        .order_by(ChatbotLog.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    logs = list(result.scalars().all())
+
+    from collections import Counter
+
+    raw_counter: Counter[str] = Counter()
+    canonical_counter: Counter[str] = Counter()
+    unmatched_counter: Counter[str] = Counter()
+    for lg in logs:
+        fields = lg.pii_fields or []
+        if not isinstance(fields, list):
+            continue
+        for f in fields:
+            raw = str(f)
+            raw_counter[raw] += 1
+            c = resolve(raw)
+            if c is None:
+                unmatched_counter[raw] += 1
+            else:
+                canonical_counter[c] += 1
+
+    types_stmt = select(PiiType)
+    types_result = await session.execute(types_stmt)
+    by_name = {t.name: t for t in types_result.scalars().all()}
+
+    total_score = 0.0
+    by_type: list[dict] = []
+    for name, count in canonical_counter.most_common():
+        pii = by_name.get(name)
+        if pii is None:
+            continue
+        contribution = float(pii.risk_score) * count
+        total_score += contribution
+        by_type.append(
+            {
+                "name": name,
+                "count": count,
+                "risk_score": float(pii.risk_score),
+                "contribution": round(contribution, 2),
+            }
+        )
+
+    lvl_stmt = select(PiiRiskLevel).order_by(PiiRiskLevel.min_score.desc())
+    lvl_result = await session.execute(lvl_stmt)
+    picked = None
+    for lv in lvl_result.scalars().all():
+        if total_score >= float(lv.min_score):
+            picked = lv
+            break
+
+    return {
+        "pii_log_count": len(logs),
+        "total_score": round(total_score, 2),
+        "level": picked.to_dict() if picked else None,
+        "by_type": by_type,
+        "unmatched": [
+            {"raw": raw, "count": cnt}
+            for raw, cnt in unmatched_counter.most_common()
+        ],
+        "raw_field_counts": [
+            {"raw": raw, "count": cnt} for raw, cnt in raw_counter.most_common()
+        ],
+    }
+
+
 async def score_pii_fields(
     session: AsyncSession, field_names: list[str]
 ) -> dict:
     """입력된 PII 필드 목록의 합산 위험도 + 등급 판정.
 
-    챗봇 로그 `pii_fields`가 들어오면 등급 산정용.
+    챗봇 로그 `pii_fields`(원본 라벨: `ssn`, `email`, `customer_name`, `phone` 등)를
+    `core.pii_resolver`로 정본 명칭에 매핑한 뒤 `pii_types.risk_score`를 조회한다.
+
+    응답:
+        matched:   정규화 매칭된 PiiType 목록
+        unmatched: 별칭 사전에서도 못 찾은 원본 라벨
+        resolved_map: 원본 → 정본 매핑 (감사증적)
+        total_score: 합산 위험도
+        level: 판정된 PiiRiskLevel
     """
+    from core.pii_resolver import resolve
+
     if not field_names:
-        return {"matched": [], "total_score": 0.0, "level": None}
-    stmt = select(PiiType).where(PiiType.name.in_(field_names))
-    result = await session.execute(stmt)
-    matched = list(result.scalars().all())
-    total = sum(float(m.risk_score) for m in matched)
+        return {
+            "matched": [],
+            "unmatched": [],
+            "resolved_map": {},
+            "total_score": 0.0,
+            "level": None,
+        }
+
+    resolved_map: dict[str, str | None] = {n: resolve(n) for n in field_names}
+    canonical = [c for c in resolved_map.values() if c is not None]
+    unmatched = [orig for orig, c in resolved_map.items() if c is None]
+
+    matched: list[PiiType] = []
+    total = 0.0
+    if canonical:
+        stmt = select(PiiType).where(PiiType.name.in_(canonical))
+        result = await session.execute(stmt)
+        by_name = {m.name: m for m in result.scalars().all()}
+        # 매칭 결과 리스트는 canonical 등장 횟수에 따라 총점 계산 (동일 유형 복수 유출은 합산)
+        for c in canonical:
+            m = by_name.get(c)
+            if m is None:
+                continue
+            matched.append(m)
+            total += float(m.risk_score)
 
     lvl_stmt = select(PiiRiskLevel).order_by(PiiRiskLevel.min_score.desc())
     lvl_result = await session.execute(lvl_stmt)
-    levels = list(lvl_result.scalars().all())
     picked = None
-    for lv in levels:
+    for lv in lvl_result.scalars().all():
         if total >= float(lv.min_score):
             picked = lv
             break
+
     return {
         "matched": [m.to_dict() for m in matched],
-        "unmatched": [n for n in field_names if not any(m.name == n for m in matched)],
+        "unmatched": unmatched,
+        "resolved_map": resolved_map,
         "total_score": round(total, 2),
         "level": picked.to_dict() if picked else None,
     }

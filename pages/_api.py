@@ -187,6 +187,11 @@ def fetch_pii_risk_levels() -> list[dict]:
     return _get("/pii-risk/levels") or []
 
 
+@st.cache_data(ttl=30)
+def fetch_pii_aggregate(limit: int = 1000) -> dict:
+    return _get("/pii-risk/aggregate", {"limit": limit}) or {}
+
+
 def score_pii_fields(fields: list[str]) -> dict | None:
     return _post("/pii-risk/score", {"fields": fields})
 
