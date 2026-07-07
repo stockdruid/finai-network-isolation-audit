@@ -4,6 +4,7 @@
 - v1 (20a896e0c6cf): chatbot_logs
 - v2 (ccb403c9f67e): diagnosis_results, policy_mappings, compliance_scores
 - v3 (b1f4a2d5c7e9): chatbot_logs 확장(실 로그 필드), common_controls, detectors, requirements
+- v4 (c9e7d3a5f011): pii_types, pii_risk_levels, isms_p_criteria, isms_p_checklist_items
 
 변경은 alembic revision + PR 리뷰 필수.
 """
@@ -345,4 +346,170 @@ class Requirement(Base):
             "detector_id": self.detector_id,
             "priority": self.priority,
             "verdict": self.verdict,
+        }
+
+
+# ---------------------------------------------------------------------------
+# v4 — 개인정보 위험도 산정체계 + 금융권 ISMS-P 법령 매핑 (정책팀 2026-07-07)
+# 원천:
+#   개인정보_위험도_산정체계.xlsx
+#   금융권_적합_ISMS-P_법령_매핑.xlsx
+# ---------------------------------------------------------------------------
+
+
+class PiiType(Base):
+    """개인정보 유형별 위험도 점수 — 정책팀 산정체계.
+
+    원천: 개인정보_위험도_산정체계.xlsx / 시트 `개인정보 유형별 위험도` (17개 유형).
+    위험도 = (징역 환산 × 0.6) + (벌금/과태료 환산 × 0.4).
+    """
+
+    __tablename__ = "pii_types"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # 주민등록번호
+    imprisonment_score: Mapped[float] = mapped_column(Numeric(4, 1), nullable=False, server_default="0.0")
+    fine_score: Mapped[float] = mapped_column(Numeric(4, 1), nullable=False, server_default="0.0")
+    weight_label: Mapped[str | None] = mapped_column(Text, nullable=True)  # x 1.0 (벌금)
+    weight_value: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, server_default="1.0")
+    converted_score: Mapped[float] = mapped_column(Numeric(4, 1), nullable=False, server_default="0.0")
+    risk_score: Mapped[float] = mapped_column(Numeric(4, 1), nullable=False, server_default="0.0", index=True)
+    legal_basis: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "imprisonment_score": float(self.imprisonment_score),
+            "fine_score": float(self.fine_score),
+            "weight_label": self.weight_label,
+            "weight_value": float(self.weight_value),
+            "converted_score": float(self.converted_score),
+            "risk_score": float(self.risk_score),
+            "legal_basis": self.legal_basis,
+        }
+
+
+class PiiRiskLevel(Base):
+    """개인정보 위험 등급 기준 (Critical/High/Medium/Low).
+
+    원천: 개인정보_위험도_산정체계.xlsx / 시트 `위험 등급 기준`.
+    합산 위험도 점수 대비 등급 판정. 단일 항목 최대 10점, 복합 유출 시 합산.
+    """
+
+    __tablename__ = "pii_risk_levels"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    level_ko: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # 위험
+    level_en: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # Critical
+    score_range: Mapped[str] = mapped_column(Text, nullable=False)  # 30점 이상
+    min_score: Mapped[float] = mapped_column(Numeric(5, 1), nullable=False)
+    max_score: Mapped[float | None] = mapped_column(Numeric(5, 1), nullable=True)
+    action_level: Mapped[str] = mapped_column(Text, nullable=False)  # 즉시 조치 필요
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "level_ko": self.level_ko,
+            "level_en": self.level_en,
+            "score_range": self.score_range,
+            "min_score": float(self.min_score),
+            "max_score": float(self.max_score) if self.max_score is not None else None,
+            "action_level": self.action_level,
+            "description": self.description,
+        }
+
+
+class IsmsPCriterion(Base):
+    """ISMS-P 인증기준 (금융권 선정 48개).
+
+    원천: 금융권_적합_ISMS-P_법령_매핑.xlsx / 시트 `01_선정기준_요약`.
+    범위: 1.1.4 / 1.2 전체 / 1.3 전체 / 2.6~2.11 전체 / 3.1.3 / 3.1.4 / 3.4 전체.
+    """
+
+    __tablename__ = "isms_p_criteria"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    major_category: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # 1. 관리체계 수립 및 운영
+    section_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # 1.1
+    section_name: Mapped[str] = mapped_column(Text, nullable=False)  # 관리체계 기반 마련
+    criterion_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # 1.1.4
+    criterion_name: Mapped[str] = mapped_column(Text, nullable=False)  # 범위 설정
+    official_standard: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checklist_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    checklist_items: Mapped[list["IsmsPChecklistItem"]] = relationship(back_populates="criterion")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "major_category": self.major_category,
+            "section_id": self.section_id,
+            "section_name": self.section_name,
+            "criterion_id": self.criterion_id,
+            "criterion_name": self.criterion_name,
+            "official_standard": self.official_standard,
+            "checklist_count": self.checklist_count,
+        }
+
+
+class IsmsPChecklistItem(Base):
+    """ISMS-P 세부 점검항목 (191개) — 인증기준별 확인사항 + 법령 + 제재.
+
+    원천: 금융권_적합_ISMS-P_법령_매핑.xlsx / 시트 `02_상세점검항목`.
+    판정: 미평가/적합/부분적합/부적합/증적부족/적용제외.
+    """
+
+    __tablename__ = "isms_p_checklist_items"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('미평가','적합','부분적합','부적합','증적부족','적용제외')",
+            name="ck_isms_p_verdict",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    criterion_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("isms_p_criteria.criterion_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    check_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    check_item: Mapped[str] = mapped_column(Text, nullable=False)  # 주요 점검항목
+    aux_standards: Mapped[str | None] = mapped_column(Text, nullable=True)  # 보조 기준 문서
+    aux_items: Mapped[str | None] = mapped_column(Text, nullable=True)  # 보조 기준 항목
+    related_laws: Mapped[str | None] = mapped_column(Text, nullable=True)  # 관련 법령
+    law_content: Mapped[str | None] = mapped_column(Text, nullable=True)  # 관련 법령 내용
+    sanction_content: Mapped[str | None] = mapped_column(Text, nullable=True)  # 제재 내용
+    verdict: Mapped[str] = mapped_column(Text, nullable=False, server_default="'미평가'")
+    evidence_location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responsible: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation_due: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dev_tech_category: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dev_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommended_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    web_security_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    criterion: Mapped["IsmsPCriterion"] = relationship(back_populates="checklist_items")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "criterion_id": self.criterion_id,
+            "check_number": self.check_number,
+            "check_item": self.check_item,
+            "aux_standards": self.aux_standards,
+            "aux_items": self.aux_items,
+            "related_laws": self.related_laws,
+            "law_content": self.law_content,
+            "sanction_content": self.sanction_content,
+            "verdict": self.verdict,
+            "evidence_location": self.evidence_location,
+            "responsible": self.responsible,
+            "remediation_due": self.remediation_due,
+            "review_memo": self.review_memo,
+            "dev_tech_category": self.dev_tech_category,
+            "dev_summary": self.dev_summary,
+            "recommended_evidence": self.recommended_evidence,
+            "web_security_ref": self.web_security_ref,
         }
