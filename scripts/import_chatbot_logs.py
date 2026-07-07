@@ -1,15 +1,21 @@
 """챗봇 실 로그 JSONL → chatbot_logs 적재.
 
-원천: docs/references/chatbot_sample_logs.jsonl (개발자 A 챗봇 파이프라인 실행 결과)
+원천:
+  - `docs/references/chatbot_sample_logs.jsonl` (초기 샘플)
+  - 개발자 A 챗봇(`msj1613/finance-compliance-chatbot`) 실 export:
+    `<chatbot repo>/logs/chatbot.jsonl` or `logs/chatbot_export.jsonl`
 
-필드 매핑:
+필드 매핑 (A 챗봇 ChatbotLogOut → 우리 v5 chatbot_logs):
   jsonl              → chatbot_logs
   ─────────────────────────────────
-  id                 → request_id 아님. 새 uuid는 request_id에 있음.
+  id                 → (스킵, 우리 BigInteger 자동 생성)
   conversation_id    → conversation_id
   request_id         → request_id
   created_at         → created_at
   event_type         → event_type
+  client_ip          → client_ip           # v5 진단팀 요청
+  user_id            → user_id             # v5
+  tool_name          → tool_name           # v5
   mode               → mode
   target_url         → target_url
   target_provider    → target_provider
@@ -19,7 +25,7 @@
   latency_ms         → response_time_ms
   status             → status
   error_detail       → error_detail
-  guardrail_triggered→ guardrail_triggered (str → [str])
+  guardrail_triggered→ guardrail_triggered (str → [str], JSONB)
   intentional_vuln_tag→ intentional_vuln_tag
   pii_detected       → pii_detected
   pii_fields         → pii_fields
@@ -31,6 +37,13 @@ Usage:
     python scripts/import_chatbot_logs.py                    # 실 로그 append
     python scripts/import_chatbot_logs.py --reset            # 기존 로그 전량 삭제 후 적재
     python scripts/import_chatbot_logs.py --path <파일경로>  # 다른 JSONL
+
+브릿지 워크플로우 (개발자 A 챗봇 → 우리 DB):
+    # A 챗봇 리포에서
+    PYTHONPATH=. uv run python scripts/export_logs.py logs/chatbot_export.jsonl
+
+    # 우리 리포에서
+    python scripts/import_chatbot_logs.py --path <A레포>/logs/chatbot_export.jsonl --reset
 """
 from __future__ import annotations
 
@@ -96,6 +109,10 @@ def row_from_jsonl(rec: dict) -> dict:
         "status": rec.get("status") or "success",
         "error_detail": rec.get("error_detail"),
         "error_code": None,
+        # v5 진단팀 요청 필드
+        "client_ip": rec.get("client_ip"),
+        "user_id": rec.get("user_id"),
+        "tool_name": rec.get("tool_name"),
         "intentional_vuln_tag": rec.get("intentional_vuln_tag"),
         "guardrail_triggered": _guardrail(rec.get("guardrail_triggered")),
         "pii_detected": bool(rec.get("pii_detected")) if rec.get("pii_detected") is not None else False,

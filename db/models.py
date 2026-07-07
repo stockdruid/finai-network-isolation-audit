@@ -5,6 +5,7 @@
 - v2 (ccb403c9f67e): diagnosis_results, policy_mappings, compliance_scores
 - v3 (b1f4a2d5c7e9): chatbot_logs 확장(실 로그 필드), common_controls, detectors, requirements
 - v4 (c9e7d3a5f011): pii_types, pii_risk_levels, isms_p_criteria, isms_p_checklist_items
+- v5 (d2a1b8f4e6c3): chatbot_logs 추적/방어 필드 (client_ip, user_id, tool_name) — 개발자 A 챗봇 브릿지
 
 변경은 alembic revision + PR 리뷰 필수.
 """
@@ -71,6 +72,11 @@ class ChatbotLog(Base):
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # v5 — 진단팀 요청(2026-07-07): DDoS 방어·행위 추적용
+    client_ip: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    tool_name: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
     # 컴플라이언스·보안 신호
     intentional_vuln_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
     guardrail_triggered: Mapped[list] = mapped_column(
@@ -107,6 +113,9 @@ class ChatbotLog(Base):
             "response_time_ms": self.response_time_ms,
             "error_detail": self.error_detail,
             "error_code": self.error_code,
+            "client_ip": self.client_ip,
+            "user_id": self.user_id,
+            "tool_name": self.tool_name,
             "intentional_vuln_tag": self.intentional_vuln_tag,
             "guardrail_triggered": self.guardrail_triggered,
             "pii_detected": self.pii_detected,
