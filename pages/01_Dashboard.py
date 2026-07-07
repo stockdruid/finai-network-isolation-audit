@@ -1,12 +1,18 @@
 """메인 대시보드 — 컴플라이언스 점수, 진단 정확도, 위반 분포, 타임라인."""
 from __future__ import annotations
 
+from collections import Counter
+
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from pages._api import (
+    fetch_isms_p_verdict_summary,
     fetch_logs,
+    fetch_pii_risk_levels,
+    fetch_pii_types,
     fetch_stats_overview,
     fetch_stats_severity,
     fetch_stats_timeline,
@@ -44,6 +50,120 @@ c4.metric(
     delta=f"정확 {overview.get('correct_detections', 0)}건",
     delta_color="normal",
 )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# v4 HERO — PII 위험도 등급 + ISMS-P 진행률 (발표 임팩트 라인)
+# ---------------------------------------------------------------------------
+
+st.subheader("🎯 컴플라이언스 현황 — v4 (개인정보 위험도 + ISMS-P)")
+
+pii_types = fetch_pii_types()
+pii_levels = fetch_pii_risk_levels()
+isms_verdicts = fetch_isms_p_verdict_summary()
+
+hero_left, hero_right = st.columns(2)
+
+# PII 위험도 카드 (챗봇 로그 pii_fields 기반 합산 점수 → 등급)
+with hero_left:
+    st.markdown("**🛡️ 개인정보 유출 위험도 (실시간)**")
+
+    all_logs = fetch_logs(limit=1000)
+    pii_logs = [lg for lg in all_logs if lg.get("pii_detected") and lg.get("pii_fields")]
+    detected_fields: list[str] = []
+    for lg in pii_logs:
+        fields = lg.get("pii_fields") or []
+        if isinstance(fields, list):
+            detected_fields.extend([str(f) for f in fields])
+
+    counts = Counter(detected_fields)
+    type_score = {r["name"]: float(r["risk_score"]) for r in pii_types}
+    total_score = sum(type_score.get(f, 0.0) * n for f, n in counts.items())
+
+    picked = None
+    for lv in sorted(pii_levels, key=lambda x: -float(x["min_score"])):
+        if total_score >= float(lv["min_score"]):
+            picked = lv
+            break
+
+    color_by_level = {
+        "Critical": "#dc2626",
+        "High": "#ea580c",
+        "Medium": "#ca8a04",
+        "Low": "#16a34a",
+    }
+    picked_color = color_by_level.get(picked["level_en"] if picked else "", "#6b7280")
+    picked_label = f"{picked['level_en']} ({picked['level_ko']})" if picked else "데이터 없음"
+    picked_action = picked["action_level"] if picked else "-"
+
+    st.markdown(
+        f"""
+        <div style="background: linear-gradient(135deg, {picked_color}22, {picked_color}55);
+                    border-left: 8px solid {picked_color}; padding: 20px; border-radius: 8px;">
+          <div style="font-size: 14px; color: #6b7280;">현재 위험 등급</div>
+          <div style="font-size: 36px; font-weight: 700; color: {picked_color}; margin: 4px 0;">
+            {picked_label}
+          </div>
+          <div style="font-size: 15px; color: #374151;">
+            합산 점수 <b>{total_score:.1f}점</b> · 조치 수준: <b>{picked_action}</b>
+          </div>
+          <div style="font-size: 13px; color: #6b7280; margin-top: 6px;">
+            PII 탐지 로그 {len(pii_logs)}건 · 유출 유형 {len(counts)}종
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ISMS-P 진행률 게이지
+with hero_right:
+    st.markdown("**📋 금융권 ISMS-P 진단 진행률**")
+
+    verdict_counts = {v["verdict"]: v["count"] for v in isms_verdicts}
+    total_items = sum(verdict_counts.values()) or 1
+    unassessed = verdict_counts.get("미평가", 0)
+    assessed = total_items - unassessed
+    progress = assessed / total_items * 100
+
+    passed = verdict_counts.get("적합", 0)
+    partial = verdict_counts.get("부분적합", 0)
+    failed = verdict_counts.get("부적합", 0)
+    evidence_missing = verdict_counts.get("증적부족", 0)
+
+    gauge_color = "#dc2626" if progress < 30 else "#eab308" if progress < 70 else "#16a34a"
+
+    fig_gauge = go.Figure(
+        go.Indicator(
+            mode="gauge+number+delta",
+            value=progress,
+            number={"suffix": "%", "font": {"size": 40}},
+            delta={"reference": 0, "position": "top"},
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1},
+                "bar": {"color": gauge_color},
+                "steps": [
+                    {"range": [0, 30], "color": "#fee2e2"},
+                    {"range": [30, 70], "color": "#fef3c7"},
+                    {"range": [70, 100], "color": "#dcfce7"},
+                ],
+                "threshold": {
+                    "line": {"color": "#111827", "width": 3},
+                    "thickness": 0.75,
+                    "value": 100,
+                },
+            },
+            title={"text": f"평가 완료: {assessed} / {total_items}", "font": {"size": 14}},
+        )
+    )
+    fig_gauge.update_layout(height=220, margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig_gauge, use_container_width=True)
+
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("적합", passed)
+    b2.metric("부분적합", partial)
+    b3.metric("부적합", failed, delta_color="inverse")
+    b4.metric("증적부족", evidence_missing, delta_color="inverse")
 
 st.divider()
 
