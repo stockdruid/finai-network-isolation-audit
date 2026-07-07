@@ -171,6 +171,71 @@ def fetch_matrix() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# v4 — PII 위험도
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_pii_types(min_score: float | None = None) -> list[dict]:
+    params: dict[str, Any] = {}
+    if min_score is not None:
+        params["min_score"] = min_score
+    return _get("/pii-risk/types", params) or []
+
+
+@st.cache_data(ttl=300)
+def fetch_pii_risk_levels() -> list[dict]:
+    return _get("/pii-risk/levels") or []
+
+
+def score_pii_fields(fields: list[str]) -> dict | None:
+    return _post("/pii-risk/score", {"fields": fields})
+
+
+# ---------------------------------------------------------------------------
+# v4 — ISMS-P
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_criteria(
+    major_category: str | None = None,
+    section_id: str | None = None,
+) -> list[dict]:
+    params: dict[str, Any] = {}
+    if major_category:
+        params["major_category"] = major_category
+    if section_id:
+        params["section_id"] = section_id
+    return _get("/isms-p/criteria", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_checklist(
+    criterion_id: str | None = None,
+    verdict: str | None = None,
+    dev_tech_category: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    params: dict[str, Any] = {"limit": limit}
+    if criterion_id:
+        params["criterion_id"] = criterion_id
+    if verdict:
+        params["verdict"] = verdict
+    if dev_tech_category:
+        params["dev_tech_category"] = dev_tech_category
+    return _get("/isms-p/checklist", params) or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_verdict_summary() -> list[dict]:
+    return _get("/isms-p/summary/verdict") or []
+
+
+@st.cache_data(ttl=60)
+def fetch_isms_p_category_summary() -> list[dict]:
+    return _get("/isms-p/summary/category") or []
+
+
+# ---------------------------------------------------------------------------
 # Health / sidebar
 # ---------------------------------------------------------------------------
 

@@ -17,6 +17,10 @@ from db.models import (
     ComplianceScore,
     Detector,
     DiagnosisResult,
+    IsmsPChecklistItem,
+    IsmsPCriterion,
+    PiiRiskLevel,
+    PiiType,
     PolicyMapping,
     Requirement,
 )
@@ -301,5 +305,142 @@ async def compliance_matrix(session: AsyncSession) -> list[dict]:
     result = await session.execute(stmt)
     return [
         {"source_standard": r[0], "control_id": r[1], "count": r[2]}
+        for r in result.all()
+    ]
+
+
+# ---------------------------------------------------------------------------
+# v4 — PII 위험도
+# ---------------------------------------------------------------------------
+
+async def list_pii_types(
+    session: AsyncSession,
+    *,
+    min_score: float | None = None,
+) -> list[PiiType]:
+    stmt = select(PiiType).order_by(PiiType.risk_score.desc(), PiiType.name)
+    if min_score is not None:
+        stmt = stmt.where(PiiType.risk_score >= min_score)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_pii_risk_levels(session: AsyncSession) -> list[PiiRiskLevel]:
+    stmt = select(PiiRiskLevel).order_by(PiiRiskLevel.min_score.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def score_pii_fields(
+    session: AsyncSession, field_names: list[str]
+) -> dict:
+    """입력된 PII 필드 목록의 합산 위험도 + 등급 판정.
+
+    챗봇 로그 `pii_fields`가 들어오면 등급 산정용.
+    """
+    if not field_names:
+        return {"matched": [], "total_score": 0.0, "level": None}
+    stmt = select(PiiType).where(PiiType.name.in_(field_names))
+    result = await session.execute(stmt)
+    matched = list(result.scalars().all())
+    total = sum(float(m.risk_score) for m in matched)
+
+    lvl_stmt = select(PiiRiskLevel).order_by(PiiRiskLevel.min_score.desc())
+    lvl_result = await session.execute(lvl_stmt)
+    levels = list(lvl_result.scalars().all())
+    picked = None
+    for lv in levels:
+        if total >= float(lv.min_score):
+            picked = lv
+            break
+    return {
+        "matched": [m.to_dict() for m in matched],
+        "unmatched": [n for n in field_names if not any(m.name == n for m in matched)],
+        "total_score": round(total, 2),
+        "level": picked.to_dict() if picked else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# v4 — ISMS-P
+# ---------------------------------------------------------------------------
+
+async def list_isms_p_criteria(
+    session: AsyncSession,
+    *,
+    major_category: str | None = None,
+    section_id: str | None = None,
+) -> list[IsmsPCriterion]:
+    stmt = select(IsmsPCriterion).order_by(IsmsPCriterion.criterion_id)
+    if major_category is not None:
+        stmt = stmt.where(IsmsPCriterion.major_category == major_category)
+    if section_id is not None:
+        stmt = stmt.where(IsmsPCriterion.section_id == section_id)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_isms_p_criterion(
+    session: AsyncSession, criterion_id: str
+) -> IsmsPCriterion | None:
+    stmt = select(IsmsPCriterion).where(IsmsPCriterion.criterion_id == criterion_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def list_isms_p_checklist(
+    session: AsyncSession,
+    *,
+    criterion_id: str | None = None,
+    verdict: str | None = None,
+    dev_tech_category: str | None = None,
+    limit: int = 500,
+) -> list[IsmsPChecklistItem]:
+    stmt = select(IsmsPChecklistItem).order_by(
+        IsmsPChecklistItem.criterion_id, IsmsPChecklistItem.check_number
+    )
+    if criterion_id is not None:
+        stmt = stmt.where(IsmsPChecklistItem.criterion_id == criterion_id)
+    if verdict is not None:
+        stmt = stmt.where(IsmsPChecklistItem.verdict == verdict)
+    if dev_tech_category is not None:
+        stmt = stmt.where(IsmsPChecklistItem.dev_tech_category == dev_tech_category)
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def isms_p_verdict_summary(session: AsyncSession) -> list[dict]:
+    """판정별 세부 점검항목 집계 (미평가/적합/부적합 등)."""
+    stmt = (
+        select(
+            IsmsPChecklistItem.verdict,
+            func.count(IsmsPChecklistItem.id).label("count"),
+        )
+        .group_by(IsmsPChecklistItem.verdict)
+        .order_by(func.count(IsmsPChecklistItem.id).desc())
+    )
+    result = await session.execute(stmt)
+    return [{"verdict": r[0], "count": r[1]} for r in result.all()]
+
+
+async def isms_p_category_summary(session: AsyncSession) -> list[dict]:
+    """대분류별 인증기준 수 + 세부 점검항목 수."""
+    crit_stmt = (
+        select(
+            IsmsPCriterion.major_category,
+            func.count(IsmsPCriterion.id).label("criterion_count"),
+            func.sum(IsmsPCriterion.checklist_count).label("checklist_count"),
+        )
+        .group_by(IsmsPCriterion.major_category)
+        .order_by(IsmsPCriterion.major_category)
+    )
+    result = await session.execute(crit_stmt)
+    return [
+        {
+            "major_category": r[0],
+            "criterion_count": r[1],
+            "checklist_count": int(r[2] or 0),
+        }
         for r in result.all()
     ]
