@@ -1,4 +1,26 @@
-version: "3.9"
+# ─────────────────────────────────────────────────────────────
+# finai-compliance 로컬/EC2 통합 실행
+#
+# 로컬:  docker compose up --build
+# EC2:   docker compose --profile prod up --build -d
+#
+# 서비스:
+#   postgres  — DB (RDS 사용 시 disable + DATABASE_URL 오버라이드)
+#   migrate   — alembic upgrade head (일회성, api 부팅 전에 완료)
+#   api       — FastAPI :8000
+#   ui        — Streamlit :8501
+#   ollama    — 로컬 LLM :11434 (선택, GPU 없으면 프로필 무거움)
+#
+# .env 파일에 환경변수 설정. .env.example 참조.
+# ─────────────────────────────────────────────────────────────
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://finai:finai@postgres:5432/finai}
+  FASTAPI_BASE_URL: ${FASTAPI_BASE_URL:-http://api:8000}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PYTHONIOENCODING: utf-8
 
 services:
   postgres:
@@ -13,19 +35,88 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U finai"]
+      test: ["CMD-SHELL", "pg_isready -U finai -d finai"]
       interval: 5s
       timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    image: finai-app:latest
+    container_name: finai-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    build: .
+    image: finai-app:latest
+    container_name: finai-api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
       retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  ui:
+    build: .
+    image: finai-app:latest
+    container_name: finai-ui
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+    ports:
+      - "8501:8501"
+    command:
+      - streamlit
+      - run
+      - ui.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8501/_stcore/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
     container_name: finai-ollama
+    profiles: ["llm"]  # docker compose --profile llm up 로만 활성화
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # GPU 사용 시 deploy.resources.reservations.devices 추가
+    restart: unless-stopped
+    # GPU 사용 시:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
 volumes:
   postgres_data:
