@@ -538,6 +538,107 @@ async def isms_p_verdict_summary(session: AsyncSession) -> list[dict]:
     return [{"verdict": r[0], "count": r[1]} for r in result.all()]
 
 
+VALID_ISMS_P_VERDICTS = {"미평가", "적합", "부분적합", "부적합", "증적부족", "적용제외"}
+
+
+async def get_isms_p_checklist_item(
+    session: AsyncSession, item_id: int
+) -> IsmsPChecklistItem | None:
+    stmt = select(IsmsPChecklistItem).where(IsmsPChecklistItem.id == item_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def update_isms_p_verdict(
+    session: AsyncSession,
+    item_id: int,
+    *,
+    verdict: str | None = None,
+    evidence_location: str | None = None,
+    responsible: str | None = None,
+    remediation_due: str | None = None,
+    review_memo: str | None = None,
+) -> IsmsPChecklistItem | None:
+    """개별 점검항목 판정·증적·담당자 업데이트 (개발자 B 진단 결과 반영용).
+
+    None으로 넘기면 해당 필드 미변경. verdict는 화이트리스트 검증.
+    """
+    item = await get_isms_p_checklist_item(session, item_id)
+    if item is None:
+        return None
+    if verdict is not None:
+        if verdict not in VALID_ISMS_P_VERDICTS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid verdict: {verdict}. Allowed: {sorted(VALID_ISMS_P_VERDICTS)}",
+            )
+        item.verdict = verdict
+    if evidence_location is not None:
+        item.evidence_location = evidence_location
+    if responsible is not None:
+        item.responsible = responsible
+    if remediation_due is not None:
+        item.remediation_due = remediation_due
+    if review_memo is not None:
+        item.review_memo = review_memo
+    try:
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"DB write failed: {exc}",
+        )
+    await session.refresh(item)
+    return item
+
+
+async def bulk_update_isms_p_verdict(
+    session: AsyncSession, updates: list[dict]
+) -> dict:
+    """진단 엔진(개발자 B) 배치 판정 반영.
+
+    updates: [{"item_id": 1, "verdict": "적합", "review_memo": "auto: DET-CHAT-PI-001 pass"}, ...]
+    화이트리스트 위반 or 존재하지 않는 item_id는 skipped에 담아 리턴 (부분 성공 허용).
+    """
+    updated: list[dict] = []
+    skipped: list[dict] = []
+
+    for u in updates:
+        item_id = u.get("item_id")
+        verdict = u.get("verdict")
+        if item_id is None:
+            skipped.append({"reason": "missing item_id", "row": u})
+            continue
+        if verdict is not None and verdict not in VALID_ISMS_P_VERDICTS:
+            skipped.append(
+                {"reason": f"invalid verdict: {verdict}", "item_id": item_id}
+            )
+            continue
+        item = await get_isms_p_checklist_item(session, int(item_id))
+        if item is None:
+            skipped.append({"reason": "not found", "item_id": item_id})
+            continue
+        if verdict is not None:
+            item.verdict = verdict
+        for field in ("evidence_location", "responsible", "remediation_due", "review_memo"):
+            val = u.get(field)
+            if val is not None:
+                setattr(item, field, val)
+        updated.append({"item_id": item.id, "verdict": item.verdict})
+
+    try:
+        await session.commit()
+    except SQLAlchemyError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"DB bulk write failed: {exc}",
+        )
+
+    return {"updated": updated, "skipped": skipped, "total": len(updates)}
+
+
 async def isms_p_category_summary(session: AsyncSession) -> list[dict]:
     """대분류별 인증기준 수 + 세부 점검항목 수."""
     crit_stmt = (

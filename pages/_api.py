@@ -240,6 +240,43 @@ def fetch_isms_p_category_summary() -> list[dict]:
     return _get("/isms-p/summary/category") or []
 
 
+def _patch(path: str, json: dict) -> Any:
+    try:
+        r = httpx.patch(f"{API_BASE_URL}{path}", json=json, timeout=DEFAULT_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as exc:
+        st.error(f"API 호출 실패 ({path}): {exc}")
+        return None
+
+
+def update_isms_p_verdict(
+    item_id: int,
+    *,
+    verdict: str | None = None,
+    evidence_location: str | None = None,
+    responsible: str | None = None,
+    remediation_due: str | None = None,
+    review_memo: str | None = None,
+) -> dict | None:
+    payload = {
+        k: v
+        for k, v in {
+            "verdict": verdict,
+            "evidence_location": evidence_location,
+            "responsible": responsible,
+            "remediation_due": remediation_due,
+            "review_memo": review_memo,
+        }.items()
+        if v is not None
+    }
+    return _patch(f"/isms-p/checklist/{item_id}", payload)
+
+
+def bulk_update_isms_p_verdict(updates: list[dict]) -> dict | None:
+    return _post("/isms-p/checklist/bulk-verdict", {"updates": updates})
+
+
 # ---------------------------------------------------------------------------
 # Health / sidebar
 # ---------------------------------------------------------------------------

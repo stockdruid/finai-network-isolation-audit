@@ -18,6 +18,7 @@ from pages._api import (
     fetch_isms_p_criteria,
     fetch_isms_p_verdict_summary,
     sidebar_status,
+    update_isms_p_verdict,
 )
 
 st.set_page_config(page_title="ISMS-P 점검표", page_icon="📋", layout="wide")
@@ -171,7 +172,10 @@ else:
     df_items = pd.DataFrame(items)
     st.caption(f"조회된 세부 점검항목: {len(df_items)}개")
 
+    verdict_options_edit = ["미평가", "적합", "부분적합", "부적합", "증적부족", "적용제외"]
+
     for _, row in df_items.iterrows():
+        item_id = int(row["id"])
         with st.expander(
             f"**{row['criterion_id']}#{row['check_number']}** — "
             f"{row['check_item'][:80]}{'…' if len(row['check_item']) > 80 else ''}  "
@@ -193,3 +197,53 @@ else:
                 st.markdown(f"**권장 증적**\n\n{row['recommended_evidence']}")
             if row.get("aux_standards"):
                 st.caption(f"보조 기준: {row['aux_standards']}")
+
+            st.divider()
+            st.markdown("**✏️ 판정 업데이트**")
+            with st.form(f"verdict_form_{item_id}", clear_on_submit=False):
+                edit_cols = st.columns([1, 2, 2])
+                current_verdict = row.get("verdict") or "미평가"
+                idx = (
+                    verdict_options_edit.index(current_verdict)
+                    if current_verdict in verdict_options_edit
+                    else 0
+                )
+                with edit_cols[0]:
+                    new_verdict = st.selectbox(
+                        "판정",
+                        verdict_options_edit,
+                        index=idx,
+                        key=f"v_{item_id}",
+                    )
+                with edit_cols[1]:
+                    new_evidence = st.text_input(
+                        "증적 위치",
+                        value=row.get("evidence_location") or "",
+                        key=f"e_{item_id}",
+                    )
+                with edit_cols[2]:
+                    new_responsible = st.text_input(
+                        "담당자",
+                        value=row.get("responsible") or "",
+                        key=f"r_{item_id}",
+                    )
+                new_memo = st.text_area(
+                    "검토 메모",
+                    value=row.get("review_memo") or "",
+                    key=f"m_{item_id}",
+                    height=68,
+                )
+                submitted = st.form_submit_button("💾 저장")
+                if submitted:
+                    result = update_isms_p_verdict(
+                        item_id,
+                        verdict=new_verdict,
+                        evidence_location=new_evidence or None,
+                        responsible=new_responsible or None,
+                        review_memo=new_memo or None,
+                    )
+                    if result:
+                        st.success(
+                            f"✅ 업데이트 완료: `{result['criterion_id']}#{result['check_number']}` → **{result['verdict']}**"
+                        )
+                        st.cache_data.clear()
