@@ -5,7 +5,8 @@
 - v2 (ccb403c9f67e): diagnosis_results, policy_mappings, compliance_scores
 - v3 (b1f4a2d5c7e9): chatbot_logs 확장(실 로그 필드), common_controls, detectors, requirements
 - v4 (c9e7d3a5f011): pii_types, pii_risk_levels, isms_p_criteria, isms_p_checklist_items
-- v5 (d2a1b8f4e6c3): chatbot_logs 추적/방어 필드 (client_ip, user_id, tool_name) — 개발자 A 챗봇 브릿지
+- v5 (d2a1b8f4e6c3): chatbot_logs 추적/방어 필드 (client_ip, user_id, tool_name) - 개발자 A 챗봇 브릿지
+- v6 (e5b3c7f9a2d4): users 테이블 추가 (개발자 A 챗봇 통합 - 평문 저장 취약점 시연용) + ChatbotLog synonym
 
 변경은 alembic revision + PR 리뷰 필수.
 """
@@ -14,9 +15,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Integer, Numeric, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID as PG_UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, synonym
 
 
 class Base(DeclarativeBase):
@@ -31,10 +32,7 @@ class ChatbotLog(Base):
     __tablename__ = "chatbot_logs"
     __table_args__ = (
         CheckConstraint("mode IN ('internal', 'external')", name="ck_chatbot_logs_mode"),
-        CheckConstraint(
-            "event_type IN ('chat', 'signup', 'login')",
-            name="ck_chatbot_logs_event_type",
-        ),
+        # v7에서 event_type CHECK 삭제 (A 챗봇이 admin_access/user_lookup 등 확장 사용)
         CheckConstraint(
             "status IN ('success', 'blocked', 'error')",
             name="ck_chatbot_logs_status",
@@ -77,6 +75,12 @@ class ChatbotLog(Base):
     user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     tool_name: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
 
+    # v6 — 개발자 A 챗봇 코드 verbatim 호환을 위한 synonym.
+    # A 코드가 user_prompt/llm_response/latency_ms로 접근/할당해도 우리 컬럼으로 매핑.
+    user_prompt = synonym("user_input")
+    llm_response = synonym("bot_response")
+    latency_ms = synonym("response_time_ms")
+
     # 컴플라이언스·보안 신호
     intentional_vuln_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
     guardrail_triggered: Mapped[list] = mapped_column(
@@ -105,12 +109,15 @@ class ChatbotLog(Base):
             "mode": self.mode,
             "status": self.status,
             "user_input": self.user_input,
+            "user_prompt": self.user_input,  # A 코드 호환 alias
             "bot_response": self.bot_response,
+            "llm_response": self.bot_response,  # A 코드 호환 alias
             "rag_context": self.rag_context,
             "model_name": self.model_name,
             "target_url": self.target_url,
             "target_provider": self.target_provider,
             "response_time_ms": self.response_time_ms,
+            "latency_ms": self.response_time_ms,  # A 코드 호환 alias
             "error_detail": self.error_detail,
             "error_code": self.error_code,
             "client_ip": self.client_ip,
@@ -521,4 +528,48 @@ class IsmsPChecklistItem(Base):
             "dev_summary": self.dev_summary,
             "recommended_evidence": self.recommended_evidence,
             "web_security_ref": self.web_security_ref,
+        }
+
+
+# ---------------------------------------------------------------------------
+# v6 — 개발자 A 챗봇 코드 통합 (auth/admin/users 라우터가 사용)
+# 원천: msj1613/finance-compliance-chatbot / app/db/models.py::User
+#
+# INTENTIONAL VULN: 비밀번호/PII를 평문 저장. 진단 엔진이
+# "DB에 인증정보 평문 저장" 시나리오를 탐지하는 대상.
+# 실제 서비스면 password는 bcrypt, ssn 등은 암호화 필요.
+# ---------------------------------------------------------------------------
+
+
+def _uuid_str() -> str:
+    from uuid import uuid4
+    return str(uuid4())
+
+
+class User(Base):
+    """로그인 사용자 (평문 저장 취약점 시연용)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_str)
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    password: Mapped[str] = mapped_column(String(128), nullable=False)  # 평문 저장!
+    ssn: Mapped[str | None] = mapped_column(String(14), nullable=True)  # 주민번호 평문
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    session_token: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 약한 토큰
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default="now()"
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "username": self.username,
+            "password": self.password,
+            "ssn": self.ssn,
+            "phone": self.phone,
+            "email": self.email,
+            "session_token": self.session_token,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
