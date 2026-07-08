@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from api import (
+    auth,
     chat,
     controls,
     detectors,
@@ -15,6 +16,7 @@ from api import (
     reports,
     requirements,
     stats,
+    users,
 )
 from middlewares.logging import setup_structlog
 from middlewares.request_id import RequestIdMiddleware
@@ -39,6 +41,8 @@ app.add_middleware(TimingMiddleware)
 
 app.include_router(health.router, tags=["health"])
 app.include_router(chat.router, tags=["chat"])
+app.include_router(auth.router, tags=["auth"])
+app.include_router(users.router, tags=["users"])
 app.include_router(logs.router, tags=["logs"])
 app.include_router(diagnosis.router, tags=["diagnosis"])
 app.include_router(policies.router, tags=["policies"])
